@@ -25,7 +25,8 @@ out_path = os.path.join(current_dir, out_file)
 with open(out_path,'w') as result_file:
 	result_file.write('// RmlUi SDL GPU shaders compiled using command: \'python compile_shaders.py\'. Do not edit manually.\n\n#include <stdint.h>\n')
 
-	for file in os.listdir(current_dir):
+	# Sorted, so that the output only changes when a shader does.
+	for file in sorted(os.listdir(current_dir)):
 		if file.endswith(".vert") or file.endswith(".frag"):
 			shader_path = os.path.join(current_dir, file)
 
