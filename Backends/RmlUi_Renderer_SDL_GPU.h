@@ -116,7 +116,7 @@ private:
 	SDL_GPUGraphicsPipeline* pipelines[size_t(ProgramId::Count)][size_t(TargetKind::Count)][size_t(BlendState::Count)][size_t(StencilState::Count)] =
 		{};
 	SDL_GPUShader* vertex_shaders[3] = {};
-	SDL_GPUShader* fragment_shaders[8] = {};
+	SDL_GPUShader* fragment_shaders[9] = {};
 	SDL_GPUSampler* linear_sampler = nullptr;
 	SDL_GPUSampler* clamp_sampler = nullptr;
 	GeometryView* fullscreen_quad = nullptr;
@@ -139,6 +139,7 @@ private:
 	// Running the commands, in EndFrame().
 	SDL_GPURenderPass* render_pass = nullptr;
 	SDL_GPUTexture* pass_texture = nullptr;
+	bool pipeline_bound = false;
 	int postprocess_order[4] = {0, 1, 2, 3};     // primary, secondary, tertiary, blend mask
 
 	Rml::Vector<Rml::UniquePtr<Buffer>> buffers; // sorted by capacity

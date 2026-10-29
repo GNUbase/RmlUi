@@ -30,7 +30,7 @@ using StencilState = RenderInterface_SDL_GPU::StencilState;
 namespace {
 
 enum class VertexShaderId { Main, Passthrough, Blur, Count };
-enum class FragmentShaderId { Color, Texture, Gradient, Passthrough, ColorMatrix, BlendMask, Blur, DropShadow, Count };
+enum class FragmentShaderId { Color, Texture, Gradient, Passthrough, ColorMatrix, BlendMask, Blur, DropShadow, Fill, Count };
 
 enum ShaderFormat {
 	ShaderFormatSPIRV,
@@ -67,6 +67,7 @@ static const ShaderDefinition fragment_shader_definitions[] = {
 	{SHADER(shader_frag_blend_mask),   0, 2}, // BlendMask
 	{SHADER(shader_frag_blur),         1, 1}, // Blur
 	{SHADER(shader_frag_drop_shadow),  1, 1}, // DropShadow
+	{SHADER(shader_frag_fill),         0, 0}, // Fill
 };
 struct ProgramDefinition {
 	VertexShaderId vertex;
@@ -81,7 +82,7 @@ static const ProgramDefinition program_definitions[] = {
 	{VertexShaderId::Passthrough, FragmentShaderId::BlendMask},   // BlendMask
 	{VertexShaderId::Blur,        FragmentShaderId::Blur},        // Blur
 	{VertexShaderId::Passthrough, FragmentShaderId::DropShadow},  // DropShadow
-	{VertexShaderId::Passthrough, FragmentShaderId::Color},       // Fill: the fullscreen quad's color, transparent
+	{VertexShaderId::Passthrough, FragmentShaderId::Fill},        // Fill: transparent
 };
 // clang-format on
 
@@ -290,6 +291,8 @@ RenderInterface_SDL_GPU::RenderInterface_SDL_GPU(SDL_GPUDevice* device, SDL_Wind
 		if (Supported(SDL_GPUSampleCount(count)))
 			sample_count = SDL_GPUSampleCount(count);
 
+	static_assert(sizeof(vertex_shaders) / sizeof(vertex_shaders[0]) == size_t(VertexShaderId::Count), "");
+	static_assert(sizeof(fragment_shaders) / sizeof(fragment_shaders[0]) == size_t(FragmentShaderId::Count), "");
 	for (size_t i = 0; i < size_t(VertexShaderId::Count); i++)
 		vertex_shaders[i] = CreateShader(device, vertex_shader_definitions[i], SDL_GPU_SHADERSTAGE_VERTEX);
 	for (size_t i = 0; i < size_t(FragmentShaderId::Count); i++)
@@ -613,6 +616,7 @@ void RenderInterface_SDL_GPU::EndPass()
 		SDL_EndGPURenderPass(render_pass);
 		render_pass = nullptr;
 		pass_texture = nullptr;
+		pipeline_bound = false;
 	}
 }
 
@@ -661,7 +665,12 @@ void RenderInterface_SDL_GPU::BeginDraw(SDL_GPUTexture* target, TargetKind kind,
 			pass_texture = target;
 		}
 	}
-	SDL_BindGPUGraphicsPipeline(render_pass, GetPipeline(program, kind, blend, stencil));
+	// Without its pipeline, e.g. when the driver refused to create it, the state's draws are skipped: drawing without
+	// a pipeline fails SDL's assertion, which waits for an answer.
+	SDL_GPUGraphicsPipeline* pipeline = GetPipeline(program, kind, blend, stencil);
+	pipeline_bound = (pipeline != nullptr);
+	if (pipeline)
+		SDL_BindGPUGraphicsPipeline(render_pass, pipeline);
 	SetViewport(Rectanglef::FromSize(Vector2f(float(width), float(height))));
 	const Rectanglei clamped = ClampToTarget(scissor.Valid() ? scissor : Rectanglei::FromSize({width, height}));
 	const SDL_Rect rect = {clamped.Left(), clamped.Top(), clamped.Width(), clamped.Height()};
@@ -676,7 +685,7 @@ void RenderInterface_SDL_GPU::SetViewport(Rectanglef viewport)
 
 void RenderInterface_SDL_GPU::DrawGeometry(const GeometryView* geometry)
 {
-	if (!geometry || geometry->num_indices == 0)
+	if (!pipeline_bound || !geometry || geometry->num_indices == 0)
 		return;
 	SDL_GPUBufferBinding vertex_buffer_binding{};
 	SDL_GPUBufferBinding index_buffer_binding{};
