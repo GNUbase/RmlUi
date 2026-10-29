@@ -13,10 +13,12 @@
 
 using namespace Rml;
 
-static constexpr int MaxNumStops = 16;           // must match MAX_NUM_STOPS in shader_frag_gradient.frag
-static constexpr int BlurSize = 7;               // the taps in shader_vert_blur.vert and shader_frag_blur.frag
+static constexpr int MaxNumStops = 16; // must match MAX_NUM_STOPS in shader_frag_gradient.frag
+static constexpr int BlurSize = 7;     // the taps in shader_vert_blur.vert and shader_frag_blur.frag
 static constexpr int BlurNumWeights = (BlurSize + 1) / 2;
-static constexpr size_t MaxNumRenderTargets = 4; // frame sizes whose textures are kept, e.g. for several windows
+// Frames, of any size, for which the textures of a frame size that none of them had are kept: windows that draw in
+// turn keep theirs, while the sizes that a window went through while it was resized are released.
+static constexpr uint64_t RenderTargetsMaxAge = 120;
 static constexpr SDL_GPUTextureFormat LayerFormat = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
 
 using ProgramId = RenderInterface_SDL_GPU::ProgramId;
@@ -356,6 +358,8 @@ void RenderInterface_SDL_GPU::Shutdown()
 	buffers.clear();
 	SDL_ReleaseGPUSampler(device, linear_sampler);
 	SDL_ReleaseGPUSampler(device, clamp_sampler);
+	linear_sampler = nullptr;
+	clamp_sampler = nullptr;
 	for (auto& by_target : pipelines)
 		for (auto& by_blend : by_target)
 			for (auto& by_stencil : by_blend)
@@ -472,21 +476,26 @@ SDL_GPUGraphicsPipeline* RenderInterface_SDL_GPU::GetPipeline(ProgramId program,
 
 RenderInterface_SDL_GPU::RenderTargets* RenderInterface_SDL_GPU::GetRenderTargets(int new_width, int new_height)
 {
-	for (Rml::UniquePtr<RenderTargets>& candidate : render_targets)
+	// Called before the frame records anything, and earlier frames' commands have run, so unused textures can go.
+	RenderTargets* found = nullptr;
+	for (auto it = render_targets.begin(); it != render_targets.end();)
 	{
-		if (candidate->width == new_width && candidate->height == new_height)
+		RenderTargets& candidate = **it;
+		if (candidate.width == new_width && candidate.height == new_height)
 		{
-			candidate->last_used_frame = frame_number;
-			return candidate.get();
+			candidate.last_used_frame = frame_number;
+			found = &candidate;
 		}
+		else if (frame_number - candidate.last_used_frame > RenderTargetsMaxAge)
+		{
+			ReleaseRenderTargets(candidate);
+			it = render_targets.erase(it);
+			continue;
+		}
+		++it;
 	}
-	if (render_targets.size() >= MaxNumRenderTargets)
-	{
-		auto oldest = std::min_element(render_targets.begin(), render_targets.end(),
-			[](const Rml::UniquePtr<RenderTargets>& a, const Rml::UniquePtr<RenderTargets>& b) { return a->last_used_frame < b->last_used_frame; });
-		ReleaseRenderTargets(**oldest);
-		render_targets.erase(oldest);
-	}
+	if (found)
+		return found;
 	Rml::UniquePtr<RenderTargets> created = Rml::MakeUnique<RenderTargets>();
 	created->width = new_width;
 	created->height = new_height;
@@ -807,6 +816,10 @@ RenderInterface_SDL_GPU::GeometryView* RenderInterface_SDL_GPU::UploadGeometry(S
 	if (!vertex_data || !index_data)
 	{
 		Log::Message(Log::LT_ERROR, "Failed to map transfer buffer(s): %s", SDL_GetError());
+		if (vertex_data)
+			SDL_UnmapGPUTransferBuffer(device, geometry->vertex_buffer->transfer_buffer);
+		if (index_data)
+			SDL_UnmapGPUTransferBuffer(device, geometry->index_buffer->transfer_buffer);
 		delete geometry;
 		return nullptr;
 	}
@@ -1094,6 +1107,12 @@ void RenderInterface_SDL_GPU::CompositeLayers(LayerHandle source, LayerHandle de
 	const DrawState draw_state = state;
 	const Rml::Vector<CompiledFilterHandle> filter_list(filters.begin(), filters.end());
 	commands.push_back([this, draw_state, source, destination, blend_mode, filter_list] {
+		// Nothing to draw outside the frame, e.g. for an element scrolled out of view; the filters' passes would get
+		// empty viewports, which Vulkan doesn't allow.
+		const Rectanglei window = ClampToTarget(draw_state.scissor.Valid() ? draw_state.scissor : Rectanglei::FromSize({width, height}));
+		if (window.Width() <= 0 || window.Height() <= 0)
+			return;
+
 		// Resolve the source layer whether or not there are filters, as the OpenGL 3 renderer does.
 		ResolveLayer(int(source), GetPostprocess(0));
 		RenderFilters({filter_list.data(), filter_list.size()}, draw_state.scissor);
@@ -1359,7 +1378,7 @@ void RenderInterface_SDL_GPU::RenderBlur(float sigma, SDL_GPUTexture* source_des
 		const bool from_source = (i % 2 == 0);
 		SDL_GPUTexture* destination = (from_source ? temp : source_destination);
 		BeginDraw(destination, TargetKind::Postprocess, ProgramId::Passthrough, BlendState::None, StencilState::Disabled, scissor);
-		SetViewport(Rectanglef::FromSize(Vector2f(float(width / 2), float(height / 2))));
+		SetViewport(Rectanglef::FromSize(Vector2f(float(Math::Max(width / 2, 1)), float(Math::Max(height / 2, 1)))));
 		DrawQuad(from_source ? source_destination : temp, uv_scaling);
 	}
 
@@ -1397,6 +1416,8 @@ void RenderInterface_SDL_GPU::RenderBlur(float sigma, SDL_GPUTexture* source_des
 	const Vector2i src_min = scissor.p0;
 	const Vector2i src_max = scissor.p1;
 	auto Upscale = [&](Vector2i to_min, Vector2i to_max) {
+		if (to_max.x <= to_min.x || to_max.y <= to_min.y)
+			return;
 		BeginDraw(source_destination, TargetKind::Postprocess, ProgramId::Passthrough, BlendState::None, StencilState::Disabled, window);
 		SetViewport(Rectanglef::FromCorners(Vector2f(to_min), Vector2f(to_max)));
 		DrawQuad(temp, Vector2f(src_max - src_min) / size, Vector2f(src_min) / size);

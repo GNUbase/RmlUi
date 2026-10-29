@@ -88,7 +88,8 @@ private:
 		int num_indices;
 	};
 
-	// The textures for frames of one size. Several windows of different sizes can share the renderer.
+	// The textures for frames of one size, until no frame has had that size for a while. Several windows of different
+	// sizes can share the renderer.
 	struct RenderTargets {
 		int width = 0;
 		int height = 0;
