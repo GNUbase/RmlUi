@@ -179,6 +179,12 @@ namespace SVG {
 				return {};
 			}
 
+			// The geometry is tinted by 'image-color', which multiplies the texture. Draw currentColor white, unless the
+			// SVG sets its own color, so that 'image-color' gives monochrome images their color.
+			lunasvg::Element root = doc.svg_document->documentElement();
+			if (!root.hasAttribute("color"))
+				root.setAttribute("color", "white");
+
 			doc.intrinsic_dimensions.x = Math::Max(float(doc.svg_document->width()), 1.0f);
 			doc.intrinsic_dimensions.y = Math::Max(float(doc.svg_document->height()), 1.0f);
 
