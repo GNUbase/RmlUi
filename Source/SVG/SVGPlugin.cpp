@@ -23,6 +23,9 @@ namespace SVG {
 			decorator_instancer = MakeUnique<DecoratorSVGInstancer>();
 			Factory::RegisterDecoratorInstancer("svg", decorator_instancer.get());
 
+			ninepatch_instancer = MakeUnique<DecoratorSVGNinePatchInstancer>();
+			Factory::RegisterDecoratorInstancer("svg-ninepatch", ninepatch_instancer.get());
+
 			XMLParser::RegisterNodeHandler("svg", MakeShared<XMLNodeHandlerSVG>());
 			XMLParser::RegisterPersistentCDATATag("svg");
 
@@ -40,6 +43,7 @@ namespace SVG {
 	private:
 		UniquePtr<ElementInstancerGeneric<ElementSVG>> element_instancer;
 		UniquePtr<DecoratorSVGInstancer> decorator_instancer;
+		UniquePtr<DecoratorSVGNinePatchInstancer> ninepatch_instancer;
 	};
 
 	void Initialise()

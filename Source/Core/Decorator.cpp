@@ -69,6 +69,12 @@ Texture DecoratorInstancerInterface::GetTexture(const String& filename) const
 	return render_manager.LoadTexture(filename, property_source->path);
 }
 
+const String& DecoratorInstancerInterface::GetSourcePath() const
+{
+	static const String empty_path;
+	return property_source ? property_source->path : empty_path;
+}
+
 RenderManager& DecoratorInstancerInterface::GetRenderManager() const
 {
 	return render_manager;

@@ -125,33 +125,15 @@ namespace SVG {
 		return default_value;
 	}
 
-	static SharedPtr<SVGData> GetHandle(RenderManager& render_manager, String move_from_id, const String& source, SVGCache::SourceType source_type,
-		const Vector2i dimensions, const bool crop_to_content, const ColourbPremultiplied colour)
+	// Finds the document in the cache, or loads it and adds it to the cache. Null if it can't be loaded.
+	static SVGDocument* FindOrLoadDocument(const String& source_id, const String& source, SVGCache::SourceType source_type)
 	{
-		SVGKey key{std::move(move_from_id), dimensions, crop_to_content, colour};
-		const String& source_id = key.source_id;
 		auto& documents = svg_cache_data->documents;
-		auto& handles = svg_cache_data->handles;
-
-		const auto it_handle = handles.find(key);
-		if (it_handle != handles.cend())
-		{
-			RMLUI_SVG_DEBUG_LOG("Found handle, reusing: %s, (%d, %d), %s, %#x", source_id.c_str(), dimensions.x, dimensions.y,
-				crop_to_content ? "crop_to_content" : "crop_none", *reinterpret_cast<const uint32_t*>(&colour[0]));
-			SharedPtr<SVGData> result = it_handle->second.lock();
-			RMLUI_ASSERTMSG(result, "Failed to lock handle in SVG cache");
-			return result;
-		}
-
-		RMLUI_SVG_DEBUG_LOG("Making new handle: %s, (%d, %d), %s, %#x", source_id.c_str(), dimensions.x, dimensions.y,
-			crop_to_content ? "crop_to_content" : "crop_none", *reinterpret_cast<const uint32_t*>(&colour[0]));
-
-		// Find or create a document
 		auto it_svg_document = documents.find(source_id);
 		if (it_svg_document == documents.cend())
 		{
 			SVGDocument doc;
-			if (source_type == SVGCache::SourceType::File)
+			if (source_type == SVGCache::SourceType::File || source_type == SVGCache::SourceType::ResolvedFile)
 			{
 				RMLUI_SVG_DEBUG_LOG("Loading SVG document from file %s", source.c_str());
 				String svg_data;
@@ -176,7 +158,7 @@ namespace SVG {
 			if (!doc.svg_document)
 			{
 				Log::Message(Rml::Log::Type::LT_WARNING, "Could not load SVG data for item %s", source_id.c_str());
-				return {};
+				return nullptr;
 			}
 
 			// The geometry is tinted by 'image-color', which multiplies the texture. Draw currentColor white, unless the
@@ -194,7 +176,34 @@ namespace SVG {
 			it_svg_document = it_inserted.first;
 		}
 
-		SVGDocument& doc = it_svg_document->second;
+		return &it_svg_document->second;
+	}
+
+	static SharedPtr<SVGData> GetHandle(RenderManager& render_manager, String move_from_id, const String& source, SVGCache::SourceType source_type,
+		const Vector2i dimensions, const bool crop_to_content, const ColourbPremultiplied colour)
+	{
+		SVGKey key{std::move(move_from_id), dimensions, crop_to_content, colour};
+		const String& source_id = key.source_id;
+		auto& handles = svg_cache_data->handles;
+
+		const auto it_handle = handles.find(key);
+		if (it_handle != handles.cend())
+		{
+			RMLUI_SVG_DEBUG_LOG("Found handle, reusing: %s, (%d, %d), %s, %#x", source_id.c_str(), dimensions.x, dimensions.y,
+				crop_to_content ? "crop_to_content" : "crop_none", *reinterpret_cast<const uint32_t*>(&colour[0]));
+			SharedPtr<SVGData> result = it_handle->second.lock();
+			RMLUI_ASSERTMSG(result, "Failed to lock handle in SVG cache");
+			return result;
+		}
+
+		RMLUI_SVG_DEBUG_LOG("Making new handle: %s, (%d, %d), %s, %#x", source_id.c_str(), dimensions.x, dimensions.y,
+			crop_to_content ? "crop_to_content" : "crop_none", *reinterpret_cast<const uint32_t*>(&colour[0]));
+
+		// Find or create a document
+		SVGDocument* found_document = FindOrLoadDocument(source_id, source, source_type);
+		if (!found_document)
+			return {};
+		SVGDocument& doc = *found_document;
 
 		Vector2f intrinsic_dimensions = doc.intrinsic_dimensions;
 		if (crop_to_content)
@@ -390,6 +399,25 @@ namespace SVG {
 		}
 
 		return Rml::SVG::GetHandle(*render_manager, source_id, source, source_type, dimensions, crop_to_content, colour);
+	}
+
+	SharedPtr<SVGData> SVGCache::GetHandle(const String& path, Element* element, const float scale)
+	{
+		RenderManager* render_manager = element->GetRenderManager();
+		if (!render_manager)
+			return {};
+
+		const SVGDocument* doc = FindOrLoadDocument(path, path, ResolvedFile);
+		if (!doc)
+			return {};
+
+		const Vector2i dimensions = GetScaledDimensions(doc->intrinsic_dimensions, scale);
+		return Rml::SVG::GetHandle(*render_manager, path, path, ResolvedFile, dimensions, false, ColourbPremultiplied(255));
+	}
+
+	Vector2i SVGCache::GetScaledDimensions(const Vector2f intrinsic_dimensions, const float scale)
+	{
+		return Vector2i((intrinsic_dimensions * scale).Round());
 	}
 
 } // namespace SVG
